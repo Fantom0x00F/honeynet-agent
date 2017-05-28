@@ -1,6 +1,6 @@
 package events
 
 type Event struct {
-	Type    int
-	Message string `json:",omitempty"`
+	Type    int `json:"type"`
+	Message string `json:"message,omitempty"`
 }
