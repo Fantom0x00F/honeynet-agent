@@ -7,18 +7,18 @@ import (
 	"time"
 	"log"
 	"errors"
+	"bytes"
 )
 
 type CentralNodeConnection struct {
-	Url url.URL
+	Secret         string
+	ResponseSecret string
+	Url            url.URL
 	sync.Mutex
 	*websocket.Conn
 }
 
 func (connection *CentralNodeConnection) Open() error {
-	if connection.Conn != nil {
-		connection.Conn.Close()
-	}
 	return connection.tryReconnect()
 }
 
@@ -42,16 +42,6 @@ func (connection *CentralNodeConnection) WriteMessage(messageType int, data []by
 		return errors.New("Connection failed")
 	}
 	return connection.Conn.WriteMessage(messageType, data)
-}
-
-func (connection *CentralNodeConnection) tryReconnect() error {
-	newConn, _, err := websocket.DefaultDialer.Dial(connection.Url.String(), nil)
-	if err != nil {
-		connection.Conn = nil
-		return err
-	}
-	connection.Conn = newConn
-	return nil
 }
 
 func (connection *CentralNodeConnection) Reconnect() error {
@@ -81,5 +71,34 @@ func (connection *CentralNodeConnection) Reconnect() error {
 			return errors.New("Failed to connect")
 		}
 	}
+	return nil
+}
+
+func (connection *CentralNodeConnection) tryReconnect() error {
+	newConn, _, err := websocket.DefaultDialer.Dial(connection.Url.String(), nil)
+	if err != nil {
+		connection.Conn = nil
+		return err
+	}
+	connection.Conn = newConn
+	if err := connection.verifyOnConnectionStart(); err != nil {
+		connection.Conn = nil
+		return err
+	}
+	return nil
+}
+
+func (connection *CentralNodeConnection) verifyOnConnectionStart() error {
+	secret := []byte(connection.Secret)
+
+	connection.Conn.WriteMessage(websocket.TextMessage, secret)
+	_, responce, err := connection.Conn.ReadMessage()
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(responce, []byte(connection.ResponseSecret)) {
+		return errors.New("Secret's not matches!")
+	}
+	log.Println("Verification complete successfull!")
 	return nil
 }

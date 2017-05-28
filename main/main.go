@@ -22,7 +22,11 @@ func main() {
 	u := url.URL{Scheme: "ws", Host: *addr, Path: "/echo"}
 	log.Printf("Try to connect to %s", u.String())
 
-	CC := centralnodeconnection.CentralNodeConnection{Url: u}
+	CC := centralnodeconnection.CentralNodeConnection{
+		Secret:         "ownsecret",
+		ResponseSecret: "ownsecret2",
+		Url:            u,
+	}
 
 	if err := CC.Open(); err != nil {
 		log.Fatal("dial:", err)
@@ -67,7 +71,6 @@ func main() {
 			case <-done:
 			case <-time.After(time.Second):
 			}
-			CC.Close()
 			return
 		}
 	}
