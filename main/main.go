@@ -6,10 +6,10 @@ import (
 	"os/signal"
 	"net/url"
 	"log"
-	"time"
 
-	"github.com/gorilla/websocket"
 	"../centralnodeconnection"
+	"../hub"
+	"../worker"
 )
 
 var addr = flag.String("connection", "localhost:8090", "http service addr")
@@ -28,50 +28,9 @@ func main() {
 		Url:            u,
 	}
 
-	if err := CC.Open(); err != nil {
-		log.Fatal("dial:", err)
-	}
-	defer CC.Close()
+	hub2 := hub.NewHub(&CC)
 
-	done := make(chan struct{})
+	go hub2.Start()
 
-	go func() {
-		defer CC.Close()
-		defer close(done)
-		for {
-			_, message, err := CC.ReadMessage()
-			if err != nil {
-				log.Println("Receive message error:", err)
-				if err := CC.Reconnect(); err != nil {
-					log.Fatal("Can't reconnect to socket ", err)
-				}
-			}
-			log.Printf("Received: %s", message)
-		}
-	}()
-
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case t := <- ticker.C:
-			err := CC.WriteMessage(websocket.TextMessage, []byte(t.String()))
-			if err != nil {
-				log.Println(err)
-				return
-			}
-		case <- interrupt:
-			log.Println("Interrupt")
-			err := CC.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
-			if err != nil {
-				log.Println("Write close error: ", err)
-			}
-			select {
-			case <-done:
-			case <-time.After(time.Second):
-			}
-			return
-		}
-	}
+	(&worker.ScheduledWorker{Hub: hub2}).Start()
 }
