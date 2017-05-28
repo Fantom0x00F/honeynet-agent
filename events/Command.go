@@ -2,5 +2,5 @@ package events
 
 type Command struct {
 	Type    int
-	Message string
+	Message string `json:",omitempty"`
 }

@@ -5,6 +5,7 @@ import (
 	"../events"
 	"log"
 	"github.com/gorilla/websocket"
+	"encoding/json"
 )
 
 type Hub struct {
@@ -39,14 +40,20 @@ func (h *Hub) Start() {
 					log.Fatal("Can't reconnect to socket ", err)
 				}
 			}
-			h.Commands <- events.Command{Type: 1, Message: string(message) }
+			command := events.Command{}
+			if err := json.Unmarshal(message, &command); err != nil {
+				log.Println("Failed to unmarshall")
+			}
+			h.Commands <- command
 		}
 	}()
 
 	for {
 		select {
 		case event := <-h.Events:
-			h.Conn.WriteMessage(websocket.TextMessage, []byte(event.Message))
+			if payload, err := json.Marshal(event); err == nil {
+				h.Conn.WriteMessage(websocket.TextMessage, payload)
+			}
 		}
 	}
 }
