@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"../centralnodeconnection"
 )
 
 var addr = flag.String("connection", "localhost:8090", "http service addr")
@@ -21,22 +22,25 @@ func main() {
 	u := url.URL{Scheme: "ws", Host: *addr, Path: "/echo"}
 	log.Printf("Try to connect to %s", u.String())
 
-	c, _ , err := websocket.DefaultDialer.Dial(u.String(), nil)
-	if err != nil {
+	CC := centralnodeconnection.CentralNodeConnection{Url: u}
+
+	if err := CC.Open(); err != nil {
 		log.Fatal("dial:", err)
 	}
-	defer c.Close()
+	defer CC.Close()
 
 	done := make(chan struct{})
 
 	go func() {
-		defer c.Close()
+		defer CC.Close()
 		defer close(done)
 		for {
-			_, message, err := c.ReadMessage()
+			_, message, err := CC.ReadMessage()
 			if err != nil {
 				log.Println("Receive message error:", err)
-				return
+				if err := CC.Reconnect(); err != nil {
+					log.Fatal("Can't reconnect to socket ", err)
+				}
 			}
 			log.Printf("Received: %s", message)
 		}
@@ -48,14 +52,14 @@ func main() {
 	for {
 		select {
 		case t := <- ticker.C:
-			err := c.WriteMessage(websocket.TextMessage, []byte(t.String()))
+			err := CC.WriteMessage(websocket.TextMessage, []byte(t.String()))
 			if err != nil {
 				log.Println(err)
 				return
 			}
 		case <- interrupt:
 			log.Println("Interrupt")
-			err := c.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+			err := CC.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
 			if err != nil {
 				log.Println("Write close error: ", err)
 			}
@@ -63,7 +67,7 @@ func main() {
 			case <-done:
 			case <-time.After(time.Second):
 			}
-			c.Close()
+			CC.Close()
 			return
 		}
 	}
