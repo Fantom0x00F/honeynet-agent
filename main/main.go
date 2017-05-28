@@ -32,5 +32,5 @@ func main() {
 
 	go hub2.Start()
 
-	(&worker.ScheduledWorker{Hub: hub2}).Start()
+	(&worker.DockerWorker{Hub: hub2}).Start()
 }
