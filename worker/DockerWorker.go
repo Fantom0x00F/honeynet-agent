@@ -97,7 +97,8 @@ func (w *DockerWorker) startContainer() {
 	images, err := w.cli.ContainerList(*w.ctx, types.ContainerListOptions{All: true})
 
 	if err != nil {
-		panic(err)
+		w.Hub.Events <- events.Event{Type: events.AgentError, Message: err.Error()}
+		return
 	}
 
 	image := containsSpecific(&images, w.configuration.ImageName)
@@ -115,7 +116,8 @@ func (w *DockerWorker) startContainer() {
 	//	panic(err)
 	//}
 	if err := w.cli.ContainerStart(*w.ctx, image.ID, types.ContainerStartOptions{}); err != nil {
-		panic(err)
+		w.Hub.Events <- events.Event{Type: events.AgentError, Message: err.Error()}
+		return
 	}
 	log.Println(image.ID)
 	w.containerId = image.ID
@@ -124,7 +126,8 @@ func (w *DockerWorker) startContainer() {
 func (w *DockerWorker) stopContainer() {
 	images, err := w.cli.ContainerList(*w.ctx, types.ContainerListOptions{All: false})
 	if err != nil {
-		panic(err)
+		w.Hub.Events <- events.Event{Type: events.AgentError, Message: err.Error()}
+		return
 	}
 
 	image := containsSpecific(&images, w.configuration.ImageName)
