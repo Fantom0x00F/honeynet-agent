@@ -6,6 +6,7 @@ const (
 	ContainerStopped    EventType = 302
 	MotionDetected      EventType = 500
 	AgentError          EventType = 900
+	Normal              EventType = 5
 )
 
 type EventType int

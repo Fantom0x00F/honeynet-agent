@@ -8,20 +8,20 @@ import (
 
 	"github.com/docker/engine-api/client"
 	"github.com/docker/engine-api/types"
-	//"github.com/docker/engine-api/types/container"
-
-	//"github.com/docker/docker/client"
-	//"github.com/docker/docker/api/types"
-	//"github.com/docker/docker/api/types/container"
-	//"github.com/docker/go-connections/nat"
 	"golang.org/x/net/context"
-	//"fmt"
 	"time"
+	"fmt"
+	"reflect"
 )
 
 type WorkerConfiguration struct {
 	ImageName     string `json:"image_name"`
 	RunParameters string `json:"run_parameters"`
+}
+
+type containerState struct {
+	processTree  [][]string
+	changedFiles []string
 }
 
 type DockerWorker struct {
@@ -30,6 +30,7 @@ type DockerWorker struct {
 	containerId     string
 	configuration   WorkerConfiguration
 	containerEvents chan ContainerEvent
+	containerState  *containerState
 	Hub             *hub.Hub
 }
 
@@ -45,11 +46,12 @@ func NewDockerWorker(hub *hub.Hub) *DockerWorker {
 		cli:             cli,
 		Hub:             hub,
 		containerEvents: make(chan ContainerEvent),
+		containerState:  &containerState{},
 	}
 }
 
 func (w *DockerWorker) Start() {
-	//todo start
+	go checkForUpdates(w)
 	for {
 		select {
 		case command := <-w.Hub.Commands:
@@ -79,10 +81,10 @@ func (w *DockerWorker) parseCommand(command *events.Command) {
 			w.Hub.Events <- events.Event{Type: events.AgentError, Message: "Container already started"}
 			return
 		}
-		//if w.configuration.ImageName == "" {
-		//	w.Hub.Events <- events.Event{Type: events.AgentError, Message: "Empty image name!"}
-		//	return
-		//}
+		if w.configuration.ImageName == "" {
+			w.Hub.Events <- events.Event{Type: events.AgentError, Message: "Empty image name!"}
+			return
+		}
 		w.startContainer()
 	case events.StopContainer:
 		if w.containerId == "" {
@@ -93,7 +95,6 @@ func (w *DockerWorker) parseCommand(command *events.Command) {
 }
 
 func (w *DockerWorker) startContainer() {
-	//images, err := w.cli.ImageList(context.Background(), types.ImageListOptions{})
 	images, err := w.cli.ContainerList(*w.ctx, types.ContainerListOptions{All: true})
 
 	if err != nil {
@@ -107,20 +108,12 @@ func (w *DockerWorker) startContainer() {
 		return
 	}
 
-	//resp, err := w.cli.ContainerCreate(*w.ctx, &container.Config{
-	//	Image: "alpine",
-	//	Cmd:   []string{"echo", "hello world"},
-	//	ExposedPorts: map[nat.Port]struct{}{"80/tcp": {}},
-	//}, nil, nil, "")
-	//if err != nil {
-	//	panic(err)
-	//}
 	if err := w.cli.ContainerStart(*w.ctx, image.ID, types.ContainerStartOptions{}); err != nil {
 		w.Hub.Events <- events.Event{Type: events.AgentError, Message: err.Error()}
 		return
 	}
-	log.Println(image.ID)
 	w.containerId = image.ID
+	w.Hub.Events <- events.Event{Type: events.Normal, Message: "Container was started"}
 }
 
 func (w *DockerWorker) stopContainer() {
@@ -139,12 +132,77 @@ func (w *DockerWorker) stopContainer() {
 	if err := w.cli.ContainerStop(*w.ctx, w.containerId, &second); err != nil {
 		log.Println("Error on stop container", err)
 		w.Hub.Events <- events.Event{Type: events.AgentError, Message: "Error on stop container"}
+		return
 	}
+	w.containerId = ""
+	w.Hub.Events <- events.Event{Type: events.Normal, Message: "Container was stopped"}
+}
+
+func checkForUpdates(w *DockerWorker) {
+	ticker := time.NewTicker(time.Second)
+	for {
+		select {
+		case <-ticker.C:
+			if w.containerId != "" {
+				if err := checkUpdates(w); err != nil {
+					log.Println("Errors due checks", err)
+				}
+			}
+		}
+	}
+}
+
+func checkUpdates(w *DockerWorker) error {
+	images, err := w.cli.ContainerList(*w.ctx, types.ContainerListOptions{All: false})
+	if err != nil {
+		w.Hub.Events <- events.Event{Type: events.AgentError, Message: err.Error()}
+		return err
+	}
+	image := containsSpecific(&images, w.configuration.ImageName)
+	if image == nil || w.containerId != image.ID {
+		w.Hub.Events <- events.Event{Type: events.AgentError, Message: "Container was killed"}
+		return err
+	}
+	processes, err := w.cli.ContainerTop(*w.ctx, w.containerId, []string{"-e"})
+	if err != nil {
+		w.Hub.Events <- events.Event{Type: events.AgentError, Message: err.Error()}
+	}
+	if len(w.containerState.processTree) != 0 && !reflect.DeepEqual(w.containerState.processTree, processes.Processes) {
+		w.Hub.Events <- events.Event{Type: events.MotionDetected, Message: "There is changes in processes!"}
+		w.Hub.Events <- events.Event{Type: events.MotionDetected, Message: fmt.Sprint(processes.Processes)}
+	}
+	w.containerState.processTree = processes.Processes
+
+	changes, err := w.cli.ContainerDiff(*w.ctx, w.containerId)
+	if err != nil {
+		w.Hub.Events <- events.Event{Type: events.AgentError, Message: err.Error()}
+	}
+	var changesStr []string
+	for _, change := range changes {
+		var kindPresentation string
+		switch change.Kind {
+		case 0:
+			kindPresentation = "modified:"
+		case 1:
+			kindPresentation = "added:"
+		case 2:
+			kindPresentation = "deleted:"
+		default:
+			kindPresentation = "unknown:"
+		}
+		changesStr = append(changesStr, kindPresentation+change.Path)
+	}
+
+	if len(w.containerState.changedFiles) != 0 && !reflect.DeepEqual(w.containerState.changedFiles, changesStr) {
+		w.Hub.Events <- events.Event{Type: events.MotionDetected, Message: "There is changes in filesystem!"}
+		w.Hub.Events <- events.Event{Type: events.MotionDetected, Message: fmt.Sprint(changesStr)}
+	}
+	w.containerState.changedFiles = changesStr
+	return nil
 }
 
 func containsSpecific(images *[]types.Container, imageName string) (*types.Container) {
 	for _, image := range *images {
-		log.Println(image.Image)
 		if image.Image == imageName {
 			return &image
 		}
