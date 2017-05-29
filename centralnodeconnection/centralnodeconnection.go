@@ -8,14 +8,34 @@ import (
 	"log"
 	"errors"
 	"bytes"
+	"crypto/tls"
+	"crypto/x509"
 )
 
 type CentralNodeConnection struct {
-	Secret         string
-	ResponseSecret string
-	Url            url.URL
+	secret         string
+	responseSecret string
+	url            url.URL
+	tlsConfig      *tls.Config
 	sync.Mutex
 	*websocket.Conn
+}
+
+func NewCentralNodeConnection(url url.URL, rootPem []byte, secret string, response string) *CentralNodeConnection {
+	roots := x509.NewCertPool()
+	ok := roots.AppendCertsFromPEM(rootPem)
+	if !ok {
+		panic("failed to parse root certificate")
+	}
+
+	config := tls.Config{RootCAs: roots}
+
+	return &CentralNodeConnection{
+		secret:         secret,
+		responseSecret: response,
+		url:            url,
+		tlsConfig:      &config,
+	}
 }
 
 func (connection *CentralNodeConnection) Open() error {
@@ -75,7 +95,8 @@ func (connection *CentralNodeConnection) Reconnect() error {
 }
 
 func (connection *CentralNodeConnection) tryReconnect() error {
-	newConn, _, err := websocket.DefaultDialer.Dial(connection.Url.String(), nil)
+	dialer := websocket.Dialer{TLSClientConfig: connection.tlsConfig}
+	newConn, _, err := dialer.Dial(connection.url.String(), nil)
 	if err != nil {
 		connection.Conn = nil
 		return err
@@ -89,14 +110,14 @@ func (connection *CentralNodeConnection) tryReconnect() error {
 }
 
 func (connection *CentralNodeConnection) verifyOnConnectionStart() error {
-	secret := []byte(connection.Secret)
+	secret := []byte(connection.secret)
 
 	connection.Conn.WriteMessage(websocket.TextMessage, secret)
 	_, responce, err := connection.Conn.ReadMessage()
 	if err != nil {
 		return err
 	}
-	if !bytes.Equal(responce, []byte(connection.ResponseSecret)) {
+	if !bytes.Equal(responce, []byte(connection.responseSecret)) {
 		return errors.New("Secret's not matches!")
 	}
 	log.Println("Verification complete successfull!")
